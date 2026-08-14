@@ -12,6 +12,7 @@ from app.domain.pronunciation import ErrorType, PronunciationFeedback
 from app.infrastructure.pronunciation.allosaurus import (
     AllosaurusPronunciationScorer,
     _default_recognizer,
+    ensure_wav,
     normalize_phone,
     text_to_word_phonemes,
 )
@@ -138,6 +139,69 @@ def test_text_to_word_phonemes_strips_punctuation(monkeypatch: pytest.MonkeyPatc
     result = text_to_word_phonemes("Hello, world.")
     assert [word for word, _ in result] == ["Hello,", "world."]
     assert result[1][1] == ("W", "ER", "L", "D")
+
+
+def test_ensure_wav_returns_wav_path_untouched(tmp_path: Path) -> None:
+    wav_path = tmp_path / "audio.wav"
+    wav_path.write_bytes(b"RIFFxxxxWAVE")
+    assert ensure_wav(str(wav_path)) == str(wav_path)
+
+
+_AV_INSTALLED = importlib.util.find_spec("av") is not None
+
+
+def write_webm(path: Path) -> None:
+    import av
+    import numpy as np
+
+    frame_samples = 640  # 40 ms at 16 kHz (valid libopus frame size)
+    samples = np.frombuffer(
+        b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 220 * i / 16000))) for i in range(frame_samples * 4)),
+        dtype="<i2",
+    ).reshape(1, -1)
+    with av.open(str(path), "w", format="webm") as container:
+        stream = container.add_stream("libopus", rate=16000)
+        for offset in range(0, samples.shape[1], frame_samples):
+            frame = av.AudioFrame.from_ndarray(samples[:, offset : offset + frame_samples], format="s16", layout="mono")
+            frame.sample_rate = 16000
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+
+
+@pytest.mark.skipif(not _AV_INSTALLED, reason="ai extras not installed")
+def test_ensure_wav_converts_webm_and_cleans_up(tmp_path: Path) -> None:
+    import wave
+
+    source = tmp_path / "recording.webm"
+    write_webm(source)
+
+    converted = ensure_wav(str(source))
+    try:
+        assert converted.endswith(".wav")
+        assert converted != str(source)
+        with wave.open(converted) as f:
+            assert f.getframerate() == 16000
+            assert f.getnchannels() == 1
+            assert f.getsampwidth() == 2
+    finally:
+        Path(converted).unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(not _AV_INSTALLED, reason="ai extras not installed")
+def test_scorer_converts_non_wav_before_recognize(tmp_path: Path) -> None:
+    source = tmp_path / "recording.webm"
+    write_webm(source)
+
+    recognizer = FakeRecognizer("HH AH L OW")
+    scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
+    scorer.score(str(source), "hello")
+
+    assert len(recognizer.calls) == 1
+    wav_path = recognizer.calls[0][0]
+    assert wav_path.endswith(".wav")
+    assert not Path(wav_path).exists(), "converted temp file must be cleaned up"
 
 
 _AI_INSTALLED = importlib.util.find_spec("allosaurus") is not None and importlib.util.find_spec("cmudict") is not None

@@ -1,6 +1,8 @@
 import importlib
+import tempfile
 import unicodedata
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from app.domain.pronunciation import (
@@ -120,6 +122,45 @@ def _default_recognizer() -> Any:
     return app.read_recognizer()
 
 
+def _convert_to_wav(audio_path: str) -> str:
+    """Decode a container (e.g. webm/opus) into a temporary 16 kHz mono PCM WAV file.
+
+    PyAV (`av`) is only imported lazily because it ships with the `ai` extras,
+    so importing this module must not require it.
+    """
+    import os
+    import av
+    import wave
+
+    fd, wav_path = tempfile.mkstemp(suffix=".wav")
+    try:
+        with av.open(audio_path) as container:
+            stream = container.streams.audio[0]
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+            with wave.open(wav_path, "wb") as target:
+                target.setnchannels(1)
+                target.setsampwidth(2)
+                target.setframerate(16000)
+                for frame in container.decode(stream):
+                    for resampled in resampler.resample(frame):
+                        target.writeframes(resampled.to_ndarray().tobytes())
+                for resampled in resampler.resample(None):
+                    target.writeframes(resampled.to_ndarray().tobytes())
+    except Exception:
+        os.close(fd)
+        Path(wav_path).unlink(missing_ok=True)
+        raise
+    os.close(fd)
+    return wav_path
+
+
+def ensure_wav(audio_path: str) -> str:
+    """Return the path as-is when it is already a WAV, otherwise convert it to WAV."""
+    if Path(audio_path).suffix.lower() in (".wav", ".wave"):
+        return audio_path
+    return _convert_to_wav(audio_path)
+
+
 class AllosaurusPronunciationScorer(PronunciationScorer):
     def __init__(
         self,
@@ -138,7 +179,12 @@ class AllosaurusPronunciationScorer(PronunciationScorer):
 
     def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
         recognizer = self._get_recognizer()
-        actual = recognizer.recognize(audio_path, lang_id=self._lang_id)
+        wav_path = ensure_wav(audio_path)
+        try:
+            actual = recognizer.recognize(wav_path, lang_id=self._lang_id)
+        finally:
+            if wav_path != audio_path:
+                Path(wav_path).unlink(missing_ok=True)
         actual_phones = [normalize_phone(phone) for phone in (actual or "").split()]
         word_phonemes = self._text_to_phonemes(expected_text)
         expected_phones = [phone for _, phones in word_phonemes for phone in phones]
