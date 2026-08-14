@@ -1,3 +1,4 @@
+import importlib.util
 import math
 import struct
 import sys
@@ -108,8 +109,10 @@ def test_text_to_word_phonemes_strips_punctuation(monkeypatch: pytest.MonkeyPatc
     assert result[1][1] == ("W", "ER", "L", "D")
 
 
-@pytest.mark.skipif(sys.modules.get("allosaurus") is None, reason="ai extras not installed")
-@pytest.mark.skipif(sys.modules.get("cmudict") is None, reason="ai extras not installed")
+_AI_INSTALLED = importlib.util.find_spec("allosaurus") is not None and importlib.util.find_spec("cmudict") is not None
+
+
+@pytest.mark.skipif(not _AI_INSTALLED, reason="ai extras not installed")
 def test_integration_scores_a_real_wav_file(tmp_path: Path) -> None:
     wav_path = tmp_path / "sample.wav"
     with wave.open(str(wav_path), "wb") as f:
