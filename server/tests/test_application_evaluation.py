@@ -168,3 +168,55 @@ def test_evaluate_audio_requires_transcriber() -> None:
     service, _, _ = make_service()
     with pytest.raises(ValueError, match="speech_to_text"):
         service.evaluate_audio("/tmp/rec.wav", "hello")
+
+
+class FakeHistory:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def record(self, result, expected_text, transcript) -> str:
+        self.calls.append((result, expected_text, transcript))
+        return "rec-1"
+
+
+class FakeVocabulary:
+    def __init__(self) -> None:
+        self.results: list = []
+
+    def add_from(self, result) -> int:
+        self.results.append(result)
+        return 2
+
+
+def test_evaluate_records_history_when_configured() -> None:
+    history = FakeHistory()
+    service = EvaluationService(
+        scorer=FakeScorer(),
+        grammar_checker=FakeGrammarChecker([]),
+        feedback_provider=FakeProvider(),
+        history=history,
+    )
+    result = service.evaluate(make_segments(["the", "cat", "sat"]), "the cat sat", "/tmp/a.wav")
+    assert result.record_id == "rec-1"
+    result_arg, expected, transcript = history.calls[0]
+    assert expected == "the cat sat"
+    assert transcript == "the cat sat"
+
+
+def test_evaluate_skips_history_when_not_configured() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate(make_segments(["the", "cat", "sat"]), "the cat sat", "/tmp/a.wav")
+    assert result.record_id is None
+
+
+def test_evaluate_extracts_vocabulary_when_configured() -> None:
+    vocabulary = FakeVocabulary()
+    service = EvaluationService(
+        scorer=FakeScorer(),
+        grammar_checker=FakeGrammarChecker([]),
+        feedback_provider=FakeProvider(),
+        vocabulary=vocabulary,
+    )
+    service.evaluate(make_segments(["the", "cat", "sat"]), "the cat sat", "/tmp/a.wav")
+    assert vocabulary.results
+    assert vocabulary.results[0].metrics.word_count == 3

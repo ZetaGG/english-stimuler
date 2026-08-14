@@ -154,3 +154,11 @@ def test_evaluate_empty_segments_string_transcribes_audio() -> None:
     response = post_evaluate(client, segments="")
     assert response.status_code == 200
     assert service.calls[0]["mode"] == "evaluate_audio"
+
+
+def test_evaluate_response_exposes_id_field() -> None:
+    client, _ = make_client()
+    response = post_evaluate(client)
+    body = response.json()
+    assert body["id"] is None
+    assert "record_id" not in body

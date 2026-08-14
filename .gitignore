@@ -16,6 +16,9 @@ apps/web/dist/
 .env.*
 !.env.example
 
+# Data (runtime SQLite db)
+data/
+
 # OS / editor
 .DS_Store
 .idea/

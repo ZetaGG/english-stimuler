@@ -1,6 +1,8 @@
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from app.application.history import HistoryService
+from app.application.vocabulary import VocabularyService
 from app.domain.feedback import FeedbackContext, FeedbackProvider, FeedbackReport
 from app.domain.grammar import GrammarChecker, GrammarIssue
 from app.domain.ielts import ComponentBands, evaluate_bands
@@ -16,6 +18,7 @@ class EvaluationResult:
     grammar_issues: tuple[GrammarIssue, ...]
     bands: ComponentBands
     report: FeedbackReport | None
+    record_id: str | None = None
 
 
 class EvaluationService:
@@ -25,11 +28,15 @@ class EvaluationService:
         grammar_checker: GrammarChecker,
         feedback_provider: FeedbackProvider,
         speech_to_text: SpeechToText | None = None,
+        history: HistoryService | None = None,
+        vocabulary: VocabularyService | None = None,
     ) -> None:
         self._scorer = scorer
         self._grammar_checker = grammar_checker
         self._feedback_provider = feedback_provider
         self._speech_to_text = speech_to_text
+        self._history = history
+        self._vocabulary = vocabulary
 
     def evaluate(
         self,
@@ -68,13 +75,17 @@ class EvaluationService:
             report = self._feedback_provider.generate(context)
         except Exception:
             report = None
-        return EvaluationResult(
+        result = EvaluationResult(
             metrics=fluency,
             pronunciation=pronunciation,
             grammar_issues=grammar_issues,
             bands=bands,
             report=report,
         )
+        record_id = self._history.record(result, expected_text, transcript) if self._history else None
+        if self._vocabulary is not None:
+            self._vocabulary.add_from(result)
+        return replace(result, record_id=record_id)
 
     def evaluate_audio(self, audio_path: str, expected_text: str) -> EvaluationResult:
         if self._speech_to_text is None:

@@ -45,7 +45,9 @@ def evaluate(
             result = service.evaluate_audio(audio_path, expected_text)
     finally:
         os.unlink(audio_path)
-    return asdict(result)
+    data = asdict(result)
+    data["id"] = data.pop("record_id")
+    return data
 
 
 def _parse_segments(segments: str) -> list[WordSegment]:
