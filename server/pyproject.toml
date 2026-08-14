@@ -5,6 +5,9 @@ description = "English Stimuler - personal English learning backend"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30",
 ]
 
@@ -23,7 +26,6 @@ packages = ["src/app"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.27",
     "pytest>=8.0",
     "pytest-cov>=5.0",
 ]

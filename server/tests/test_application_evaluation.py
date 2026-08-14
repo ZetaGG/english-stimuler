@@ -1,0 +1,126 @@
+import pytest
+
+from app.application.evaluation import EvaluationResult, EvaluationService
+from app.domain.feedback import FeedbackContext, FeedbackProvider, FeedbackReport
+from app.domain.grammar import GrammarChecker, GrammarIssue
+from app.domain.metrics import WordSegment
+from app.domain.pronunciation import ErrorType, PronunciationFeedback, PronunciationIssue, PronunciationScorer
+
+
+def make_segments(texts: list[str], gap: float = 0.5, dur: float = 0.4) -> list[WordSegment]:
+    segments: list[WordSegment] = []
+    t = 0.0
+    for text in texts:
+        segments.append(WordSegment(text=text, start=t, end=t + dur))
+        t += dur + gap
+    return segments
+
+
+class FakeScorer(PronunciationScorer):
+    def __init__(self, score: float = 80.0) -> None:
+        self.score_value = score
+
+    def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
+        issue = PronunciationIssue("hello", ErrorType.SUBSTITUTION)
+        return PronunciationFeedback(overall_score=self.score_value, issues=[issue])
+
+
+class FakeGrammarChecker(GrammarChecker):
+    def __init__(self, issues: list[GrammarIssue] | None = None) -> None:
+        self.issues = issues if issues is not None else []
+
+    def check(self, text: str) -> list[GrammarIssue]:
+        self.last_text = text
+        return self.issues
+
+
+class FakeProvider(FeedbackProvider):
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+
+    def generate(self, context: FeedbackContext) -> FeedbackReport:
+        self.last_context = context
+        if self.fail:
+            raise RuntimeError("provider down")
+        return FeedbackReport(summary="Great", strengths=("fluent",), tips=("add detail",))
+
+
+def make_service(
+    *, scorer: PronunciationScorer | None = None, provider_fails: bool = False
+) -> tuple[EvaluationService, FakeGrammarChecker, FakeProvider]:
+    grammar = FakeGrammarChecker([GrammarIssue("typo", 0, 4)])
+    provider = FakeProvider(fail=provider_fails)
+    service = EvaluationService(
+        scorer=scorer or FakeScorer(),
+        grammar_checker=grammar,
+        feedback_provider=provider,
+    )
+    return service, grammar, provider
+
+
+def test_evaluate_computes_metrics_and_bands() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate(make_segments(["um", "the", "cat", "sat"]), "the cat sat", "/tmp/a.wav")
+    assert isinstance(result, EvaluationResult)
+    assert result.metrics.word_count == 4
+    assert result.metrics.filler_words == {"um": 1}
+    assert result.bands.overall > 0.0
+    assert result.bands.pronunciation == 7.5
+
+
+def test_evaluate_runs_grammar_check_on_transcript() -> None:
+    service, grammar, _ = make_service()
+    result = service.evaluate(make_segments(["hello", "world"]), "hello world", "/tmp/a.wav")
+    assert grammar.last_text == "hello world"
+    assert len(result.grammar_issues) == 1
+    assert result.grammar_issues[0].message == "typo"
+
+
+def test_evaluate_includes_pronunciation_feedback() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate(make_segments(["hello"]), "hello", "/tmp/a.wav")
+    assert result.pronunciation.overall_score == 80.0
+    assert len(result.pronunciation.issues) == 1
+
+
+def test_evaluate_includes_provider_report() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate(make_segments(["hello"]), "hello", "/tmp/a.wav")
+    assert result.report is not None
+    assert result.report.summary == "Great"
+
+
+def test_evaluate_degrades_report_when_provider_fails() -> None:
+    service, _, _ = make_service(provider_fails=True)
+    result = service.evaluate(make_segments(["hello"]), "hello", "/tmp/a.wav")
+    assert result.report is None
+    assert result.metrics.word_count == 1
+    assert result.bands.overall > 0.0
+
+
+def test_evaluate_builds_feedback_context_for_provider() -> None:
+    service, _, provider = make_service()
+    service.evaluate(make_segments(["hello", "world"]), "hello world", "/tmp/a.wav")
+    context = provider.last_context
+    assert context.transcript == "hello world"
+    assert context.expected_text == "hello world"
+    assert context.pronunciation_score == 80.0
+    assert len(context.grammar_issues) == 1
+
+
+def test_evaluate_zero_grammar_errors_yields_top_grammar_band() -> None:
+    grammar = FakeGrammarChecker([])
+    service = EvaluationService(
+        scorer=FakeScorer(),
+        grammar_checker=grammar,
+        feedback_provider=FakeProvider(),
+    )
+    result = service.evaluate(make_segments(["the", "cat"]), "the cat", "/tmp/a.wav")
+    assert result.bands.grammar == 9.0
+
+
+def test_evaluate_empty_segments_still_returns_result() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate([], "the cat sat", "/tmp/a.wav")
+    assert result.metrics.word_count == 0
+    assert result.bands.overall >= 1.0
