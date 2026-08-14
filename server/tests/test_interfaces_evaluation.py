@@ -15,8 +15,7 @@ class FakeEvaluationService(EvaluationService):
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def evaluate(self, segments, expected_text, audio_path):
-        self.calls.append({"segments": list(segments), "expected_text": expected_text, "audio_path": audio_path})
+    def _result(self, segments) -> EvaluationResult:
         return EvaluationResult(
             metrics=FluencyMetrics(
                 word_count=len(segments),
@@ -36,6 +35,14 @@ class FakeEvaluationService(EvaluationService):
             report=FeedbackReport(summary="Nice", strengths=("clear",), tips=("slow down",)),
         )
 
+    def evaluate(self, segments, expected_text, audio_path):
+        self.calls.append({"mode": "evaluate", "segments": list(segments), "expected_text": expected_text, "audio_path": audio_path})
+        return self._result(segments)
+
+    def evaluate_audio(self, audio_path, expected_text):
+        self.calls.append({"mode": "evaluate_audio", "audio_path": audio_path, "expected_text": expected_text})
+        return self._result([])
+
 
 def make_client() -> tuple[TestClient, FakeEvaluationService]:
     service = FakeEvaluationService()
@@ -48,12 +55,22 @@ def segments_payload() -> str:
 
 
 def post_evaluate(client: TestClient, *, segments: str = None) -> object:
+    data = {"expected_text": "hello world"}
+    if segments is not None:
+        data["segments"] = segments
+    elif segments is None:
+        data["segments"] = segments_payload()
     return client.post(
         "/v1/evaluate",
-        data={
-            "expected_text": "hello world",
-            "segments": segments if segments is not None else segments_payload(),
-        },
+        data=data,
+        files={"audio": ("rec.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
+    )
+
+
+def post_evaluate_audio_only(client: TestClient) -> object:
+    return client.post(
+        "/v1/evaluate",
+        data={"expected_text": "hello world"},
         files={"audio": ("rec.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")},
     )
 
@@ -119,3 +136,21 @@ def test_evaluate_report_is_null_when_service_returns_none() -> None:
     response = post_evaluate(TestClient(app))
     assert response.status_code == 200
     assert response.json()["report"] is None
+
+
+def test_evaluate_without_segments_transcribes_audio() -> None:
+    client, service = make_client()
+    response = post_evaluate_audio_only(client)
+    assert response.status_code == 200
+    call = service.calls[0]
+    assert call["mode"] == "evaluate_audio"
+    assert call["audio_path"].endswith(".wav")
+    assert call["expected_text"] == "hello world"
+    assert response.json()["metrics"]["word_count"] == 0
+
+
+def test_evaluate_empty_segments_string_transcribes_audio() -> None:
+    client, service = make_client()
+    response = post_evaluate(client, segments="")
+    assert response.status_code == 200
+    assert service.calls[0]["mode"] == "evaluate_audio"

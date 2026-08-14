@@ -5,6 +5,7 @@ from app.domain.feedback import FeedbackContext, FeedbackProvider, FeedbackRepor
 from app.domain.grammar import GrammarChecker, GrammarIssue
 from app.domain.metrics import WordSegment
 from app.domain.pronunciation import ErrorType, PronunciationFeedback, PronunciationIssue, PronunciationScorer
+from app.domain.speech import SpeechToText
 
 
 def make_segments(texts: list[str], gap: float = 0.5, dur: float = 0.4) -> list[WordSegment]:
@@ -124,3 +125,46 @@ def test_evaluate_empty_segments_still_returns_result() -> None:
     result = service.evaluate([], "the cat sat", "/tmp/a.wav")
     assert result.metrics.word_count == 0
     assert result.bands.overall >= 1.0
+
+
+class FakeTranscriber(SpeechToText):
+    def __init__(self, segments: list[WordSegment] | None = None) -> None:
+        self.segments = segments if segments is not None else make_segments(["the", "cat", "sat"])
+        self.last_path: str | None = None
+
+    def transcribe(self, audio_path: str) -> list[WordSegment]:
+        self.last_path = audio_path
+        return self.segments
+
+
+def test_evaluate_audio_transcribes_and_evaluates() -> None:
+    transcriber = FakeTranscriber()
+    grammar = FakeGrammarChecker([])
+    service = EvaluationService(
+        scorer=FakeScorer(),
+        grammar_checker=grammar,
+        feedback_provider=FakeProvider(),
+        speech_to_text=transcriber,
+    )
+    result = service.evaluate_audio("/tmp/rec.wav", "the cat sat")
+    assert transcriber.last_path == "/tmp/rec.wav"
+    assert result.metrics.word_count == 3
+    assert result.bands.overall > 0.0
+
+
+def test_evaluate_audio_uses_transcribed_words_for_metrics() -> None:
+    transcriber = FakeTranscriber(make_segments(["um", "hello", "there"]))
+    service = EvaluationService(
+        scorer=FakeScorer(),
+        grammar_checker=FakeGrammarChecker([]),
+        feedback_provider=FakeProvider(),
+        speech_to_text=transcriber,
+    )
+    result = service.evaluate_audio("/tmp/rec.wav", "hello there")
+    assert result.metrics.filler_words == {"um": 1}
+
+
+def test_evaluate_audio_requires_transcriber() -> None:
+    service, _, _ = make_service()
+    with pytest.raises(ValueError, match="speech_to_text"):
+        service.evaluate_audio("/tmp/rec.wav", "hello")

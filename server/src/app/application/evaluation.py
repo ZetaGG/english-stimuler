@@ -6,6 +6,7 @@ from app.domain.grammar import GrammarChecker, GrammarIssue
 from app.domain.ielts import ComponentBands, evaluate_bands
 from app.domain.metrics import FluencyMetrics, WordSegment, compute_fluency
 from app.domain.pronunciation import PronunciationFeedback, PronunciationScorer
+from app.domain.speech import SpeechToText
 
 
 @dataclass(frozen=True)
@@ -23,10 +24,12 @@ class EvaluationService:
         scorer: PronunciationScorer,
         grammar_checker: GrammarChecker,
         feedback_provider: FeedbackProvider,
+        speech_to_text: SpeechToText | None = None,
     ) -> None:
         self._scorer = scorer
         self._grammar_checker = grammar_checker
         self._feedback_provider = feedback_provider
+        self._speech_to_text = speech_to_text
 
     def evaluate(
         self,
@@ -72,3 +75,9 @@ class EvaluationService:
             bands=bands,
             report=report,
         )
+
+    def evaluate_audio(self, audio_path: str, expected_text: str) -> EvaluationResult:
+        if self._speech_to_text is None:
+            raise ValueError("speech_to_text is not configured")
+        segments = self._speech_to_text.transcribe(audio_path)
+        return self.evaluate(segments, expected_text, audio_path)

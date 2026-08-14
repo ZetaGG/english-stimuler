@@ -5,6 +5,7 @@ from app.application.evaluation import EvaluationService
 from app.infrastructure.feedback.openrouter import OpenRouterFeedbackProvider
 from app.infrastructure.grammar.languagetool import LanguageToolGrammarChecker
 from app.infrastructure.pronunciation.allosaurus import AllosaurusPronunciationScorer
+from app.infrastructure.speech.faster_whisper import FasterWhisperTranscriber, default_device
 from app.interfaces.evaluation import router as evaluation_router
 from app.interfaces.health import router as health_router
 
@@ -24,6 +25,7 @@ def _default_evaluation_service() -> EvaluationService:
         scorer=AllosaurusPronunciationScorer(),
         grammar_checker=LanguageToolGrammarChecker(),
         feedback_provider=OpenRouterFeedbackProvider(),
+        speech_to_text=FasterWhisperTranscriber(device=default_device()),
     )
 
 

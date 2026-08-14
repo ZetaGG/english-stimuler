@@ -12,8 +12,27 @@ from app.domain.pronunciation import ErrorType, PronunciationFeedback
 from app.infrastructure.pronunciation.allosaurus import (
     AllosaurusPronunciationScorer,
     _default_recognizer,
+    normalize_phone,
     text_to_word_phonemes,
 )
+
+
+def test_normalize_phone_maps_aspirated_and_vowels() -> None:
+    assert normalize_phone("kʰ") == "K"
+    assert normalize_phone("ʌ") == "AH"
+    assert normalize_phone("ɹ̩") == "R"
+    assert normalize_phone("ə") == "AH"
+
+
+def test_normalize_phone_maps_digraphs() -> None:
+    assert normalize_phone("tʃ") == "CH"
+    assert normalize_phone("dʒ") == "JH"
+
+
+def test_normalize_phone_passes_through_unknown_and_uppercase() -> None:
+    assert normalize_phone("χ") == "χ"
+    assert normalize_phone("HH") == "HH"
+    assert normalize_phone("OW") == "OW"
 
 
 class FakeRecognizer:
@@ -56,6 +75,18 @@ def test_scorer_flags_substitution_in_word() -> None:
     assert feedback.issues[0].word == "hello"
     assert feedback.issues[0].error_type is ErrorType.SUBSTITUTION
     assert feedback.issues[0].expected_phonemes == ("AH",)
+    assert feedback.issues[0].actual_phonemes == ("EH",)
+
+
+def test_scorer_normalizes_allosaurus_ipa_output() -> None:
+    def quick_phonemes(text: str) -> list[tuple[str, tuple[str, ...]]]:
+        return [("quick", ("K", "W", "IH", "K"))]
+
+    recognizer = FakeRecognizer("kʰ w e n")
+    scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=quick_phonemes)
+    feedback = scorer.score("/tmp/audio.wav", "quick")
+    assert feedback.overall_score == 50.0
+    assert feedback.issues[0].expected_phonemes == ("IH",)
     assert feedback.issues[0].actual_phonemes == ("EH",)
 
 

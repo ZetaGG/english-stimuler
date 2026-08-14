@@ -34,18 +34,24 @@ def _save_audio(audio: UploadFile) -> str:
 def evaluate(
     expected_text: str = Form(...),
     audio: UploadFile = File(...),
-    segments: str = Form(...),
+    segments: str = Form(""),
     service: EvaluationService = Depends(_service),
 ) -> dict:
+    audio_path = _save_audio(audio)
+    try:
+        if segments and segments.strip():
+            result = service.evaluate(_parse_segments(segments), expected_text, audio_path)
+        else:
+            result = service.evaluate_audio(audio_path, expected_text)
+    finally:
+        os.unlink(audio_path)
+    return asdict(result)
+
+
+def _parse_segments(segments: str) -> list[WordSegment]:
     try:
         raw_segments = json.loads(segments)
         parsed_segments = [SegmentIn(**item) for item in raw_segments]
     except (json.JSONDecodeError, TypeError, ValueError):
         raise HTTPException(status_code=422, detail="segments must be a JSON array of {text, start, end}")
-    words = [WordSegment(text=item.text, start=item.start, end=item.end) for item in parsed_segments]
-    audio_path = _save_audio(audio)
-    try:
-        result = service.evaluate(words, expected_text, audio_path)
-    finally:
-        os.unlink(audio_path)
-    return asdict(result)
+    return [WordSegment(text=item.text, start=item.start, end=item.end) for item in parsed_segments]
