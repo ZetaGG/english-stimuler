@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,25 @@ def test_vocabulary_remove(tmp_path: Path) -> None:
     assert store.remove("brown") is True
     assert store.remove("brown") is False
     assert store.items() == []
+
+
+def test_concurrent_access_never_raises_or_loses_data(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "test.db")
+    for index in range(20):
+        store.save(make_record(f"seed-{index}", created_at=f"2026-01-{index + 1:02d}T00:00:00+00:00"))
+
+    def worker(thread_id: int) -> list[str]:
+        seen = []
+        for iteration in range(25):
+            records = store.list(limit=5, offset=0)
+            seen.append(records[0].id if records else None)
+            if iteration % 5 == 0:
+                store.save(make_record(f"thread-{thread_id}-{iteration}", created_at=f"2026-02-{iteration + 1:02d}T00:00:00+00:00"))
+            store.count()
+        return seen
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(worker, range(8)))
+
+    assert all(len(seen) == 25 and seen[0] is not None for seen in results)
+    assert store.count() == 20 + 8 * 5

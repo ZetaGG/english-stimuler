@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,7 @@ def _to_record(row: sqlite3.Row) -> EvaluationRecord:
 
 class SQLiteStore(EvaluationStore, VocabularyStore):
     def __init__(self, db_path: str | Path) -> None:
+        self._lock = threading.RLock()
         self._connection = sqlite3.connect(str(db_path), check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.executescript(
@@ -85,7 +87,8 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
         )
 
     def save(self, record: EvaluationRecord) -> None:
-        self._connection.execute(
+        with self._lock:
+            self._connection.execute(
             """
             INSERT INTO evaluations (
                 id, created_at, expected_text, transcript, wpm, lexical_diversity,
@@ -114,45 +117,53 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
         self._connection.commit()
 
     def get(self, record_id: str) -> EvaluationRecord | None:
-        row = self._connection.execute(
+        with self._lock:
+            row = self._connection.execute(
             "SELECT * FROM evaluations WHERE id = ?", (record_id,)
         ).fetchone()
         return _to_record(row) if row else None
 
     def list(self, limit: int = 20, offset: int = 0) -> list[EvaluationRecord]:
-        rows = self._connection.execute(
-            "SELECT * FROM evaluations ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM evaluations ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
         return [_to_record(row) for row in rows]
 
     def count(self) -> int:
-        return int(self._connection.execute("SELECT COUNT(*) FROM evaluations").fetchone()[0])
+        with self._lock:
+            return int(self._connection.execute("SELECT COUNT(*) FROM evaluations").fetchone()[0])
 
     def delete(self, record_id: str) -> bool:
-        cursor = self._connection.execute("DELETE FROM evaluations WHERE id = ?", (record_id,))
-        self._connection.commit()
+        with self._lock:
+            cursor = self._connection.execute("DELETE FROM evaluations WHERE id = ?", (record_id,))
+            self._connection.commit()
         return cursor.rowcount > 0
 
     def add(self, words: Sequence[str], added_at: str) -> int:
         added = 0
-        for word in words:
-            cursor = self._connection.execute(
-                "INSERT OR IGNORE INTO vocabulary (word, added_at) VALUES (?, ?)",
-                (word, added_at),
-            )
-            added += cursor.rowcount
-        self._connection.commit()
+        with self._lock:
+            for word in words:
+                cursor = self._connection.execute(
+                    "INSERT OR IGNORE INTO vocabulary (word, added_at) VALUES (?, ?)",
+                    (word, added_at),
+                )
+                added += cursor.rowcount
+            self._connection.commit()
         return added
 
     def items(self) -> list[VocabularyItem]:
-        rows = self._connection.execute("SELECT word, added_at FROM vocabulary ORDER BY added_at DESC, word").fetchall()
+        with self._lock:
+            rows = self._connection.execute("SELECT word, added_at FROM vocabulary ORDER BY added_at DESC, word").fetchall()
         return [VocabularyItem(word=row["word"], added_at=row["added_at"]) for row in rows]
 
     def remove(self, word: str) -> bool:
-        cursor = self._connection.execute("DELETE FROM vocabulary WHERE word = ?", (word,))
-        self._connection.commit()
+        with self._lock:
+            cursor = self._connection.execute("DELETE FROM vocabulary WHERE word = ?", (word,))
+            self._connection.commit()
         return cursor.rowcount > 0
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
