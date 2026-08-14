@@ -1,0 +1,28 @@
+[project]
+name = "english-stimuler-server"
+version = "0.1.0"
+description = "English Stimuler - personal English learning backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"

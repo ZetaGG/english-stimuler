@@ -1,0 +1,7 @@
+services:
+  languagetool:
+    image: erikvl87/languagetool
+    container_name: english-stimuler-languagetool
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
