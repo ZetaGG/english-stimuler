@@ -18,6 +18,8 @@ class EvaluationResult:
     grammar_issues: tuple[GrammarIssue, ...]
     bands: ComponentBands
     report: FeedbackReport | None
+    transcript: str = ""
+    expected_text: str = ""
     record_id: str | None = None
 
 
@@ -46,7 +48,7 @@ class EvaluationService:
     ) -> EvaluationResult:
         fluency = compute_fluency(segments)
         transcript = " ".join(segment.text for segment in segments)
-        pronunciation = self._scorer.score(audio_path, expected_text)
+        pronunciation = self._scorer.score(audio_path, segments)
         grammar_issues = tuple(self._grammar_checker.check(transcript))
         error_ratio = len(grammar_issues) / max(fluency.word_count, 1)
         bands = evaluate_bands(
@@ -81,6 +83,8 @@ class EvaluationService:
             grammar_issues=grammar_issues,
             bands=bands,
             report=report,
+            transcript=transcript,
+            expected_text=expected_text,
         )
         record_id = self._history.record(result, expected_text, transcript) if self._history else None
         if self._vocabulary is not None:

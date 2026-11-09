@@ -1,5 +1,7 @@
 import type { EvaluationResult } from "../types";
 import { bandColor } from "./BandBadge";
+import { GrammarIssues } from "./GrammarIssues";
+import { PronunciationIssues } from "./PronunciationIssues";
 import { ScoreBar } from "./ScoreBar";
 
 interface ResultsProps {
@@ -34,6 +36,18 @@ export function Results({ result, onReset, onHome }: ResultsProps) {
           <div className="band-big">{bands.overall.toFixed(1)}</div>
           <div className="band-label">overall band</div>
         </div>
+      </div>
+
+      <div className="card">
+        <h2>Your attempt</h2>
+        <p style={{ margin: 0, color: "var(--text)" }}>
+          <em style={{ color: "var(--text)" }}>Prompt:</em> {result.expected_text}
+        </p>
+        {result.transcript && (
+          <p className="muted" style={{ margin: 0, maxWidth: "60ch" }}>
+            You said: “{result.transcript}”
+          </p>
+        )}
       </div>
 
       <div className="grid-2">
@@ -109,42 +123,8 @@ export function Results({ result, onReset, onHome }: ResultsProps) {
       )}
 
       <div className="grid-2">
-        {pronunciation.issues.length > 0 && (
-          <div className="card">
-            <h2>Pronunciation</h2>
-            <div className="issues-list">
-              {pronunciation.issues.map((issue, index) => (
-                <div className="issue" key={`${issue.word}-${index}`}>
-                  <span>
-                    <span className="word">{issue.word || "(word)"}</span>{" "}
-                    <span className="type">{issue.error_type.replace("_", " ")}</span>
-                  </span>
-                  {issue.expected_phonemes.length > 0 && (
-                    <span className="dim">
-                      /{issue.expected_phonemes.join("")}/ → /{issue.actual_phonemes.join("")}/
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {grammar_issues.length > 0 && (
-          <div className="card">
-            <h2>Grammar</h2>
-            <div className="issues-list">
-              {grammar_issues.map((issue, index) => (
-                <div className="issue" key={index}>
-                  <span>{issue.message}</span>
-                  {issue.suggestions.length > 0 && (
-                    <span className="dim">→ {issue.suggestions.join(", ")}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <PronunciationIssues words={pronunciation.words} />
+        <GrammarIssues issues={grammar_issues} />
       </div>
     </div>
   );

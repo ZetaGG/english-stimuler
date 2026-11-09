@@ -20,8 +20,10 @@ def make_segments(texts: list[str], gap: float = 0.5, dur: float = 0.4) -> list[
 class FakeScorer(PronunciationScorer):
     def __init__(self, score: float = 80.0) -> None:
         self.score_value = score
+        self.last_words: list[WordSegment] = []
 
-    def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
+    def score(self, audio_path: str, words: list[WordSegment]) -> PronunciationFeedback:
+        self.last_words = list(words)
         issue = PronunciationIssue("hello", ErrorType.SUBSTITUTION)
         return PronunciationFeedback(overall_score=self.score_value, issues=[issue])
 
@@ -69,6 +71,13 @@ def test_evaluate_computes_metrics_and_bands() -> None:
     assert result.bands.pronunciation == 7.5
 
 
+def test_evaluate_includes_transcript() -> None:
+    service, _, _ = make_service()
+    result = service.evaluate(make_segments(["hello", "world"]), "hello world", "/tmp/a.wav")
+    assert result.transcript == "hello world"
+    assert result.expected_text == "hello world"
+
+
 def test_evaluate_runs_grammar_check_on_transcript() -> None:
     service, grammar, _ = make_service()
     result = service.evaluate(make_segments(["hello", "world"]), "hello world", "/tmp/a.wav")
@@ -82,6 +91,13 @@ def test_evaluate_includes_pronunciation_feedback() -> None:
     result = service.evaluate(make_segments(["hello"]), "hello", "/tmp/a.wav")
     assert result.pronunciation.overall_score == 80.0
     assert len(result.pronunciation.issues) == 1
+
+
+def test_evaluate_scores_pronunciation_against_transcript_not_prompt() -> None:
+    scorer = FakeScorer()
+    service, _, _ = make_service(scorer=scorer)
+    service.evaluate(make_segments(["okay", "so", "here"]), "the cat sat on the mat", "/tmp/a.wav")
+    assert [segment.text for segment in scorer.last_words] == ["okay", "so", "here"]
 
 
 def test_evaluate_includes_provider_report() -> None:

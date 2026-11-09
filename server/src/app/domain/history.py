@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from app.domain.feedback import FeedbackReport
+from app.domain.grammar import GrammarIssue
+from app.domain.pronunciation import PronunciationIssue, PronunciationWordIssue
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,9 @@ class EvaluationRecord:
     grammar_band: float
     overall_band: float
     report: FeedbackReport | None = None
+    pronunciation_issues: tuple[PronunciationIssue, ...] = ()
+    pronunciation_words: tuple[PronunciationWordIssue, ...] = ()
+    grammar_issues: tuple[GrammarIssue, ...] = ()
 
 
 class EvaluationStore(ABC):

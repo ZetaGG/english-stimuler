@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.domain.metrics import WordSegment
 from app.domain.pronunciation import ErrorType, PronunciationFeedback
 from app.infrastructure.pronunciation.allosaurus import (
     AllosaurusPronunciationScorer,
@@ -16,6 +17,15 @@ from app.infrastructure.pronunciation.allosaurus import (
     normalize_phone,
     text_to_word_phonemes,
 )
+
+
+def make_wav(path: Path, seconds: float = 1.0, framerate: int = 16000) -> Path:
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(framerate)
+        f.writeframes(b"\x00\x00" * int(framerate * seconds))
+    return path
 
 
 def test_normalize_phone_maps_aspirated_and_vowels() -> None:
@@ -46,6 +56,16 @@ class FakeRecognizer:
         return self.output
 
 
+class SequenceRecognizer:
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = list(outputs)
+        self.calls: list[tuple[str, str]] = []
+
+    def recognize(self, audio_path: str, lang_id: str = "eng") -> str:
+        self.calls.append((audio_path, lang_id))
+        return self.outputs.pop(0)
+
+
 def fake_text_to_phonemes(text: str) -> list[tuple[str, tuple[str, ...]]]:
     if "hello" in text:
         return [("hello", ("HH", "AH", "L", "OW"))]
@@ -58,19 +78,23 @@ def fake_cmudict_module(monkeypatch: pytest.MonkeyPatch, lexicon: dict) -> None:
     monkeypatch.setitem(sys.modules, "cmudict", module)
 
 
-def test_scorer_returns_perfect_score_for_identical_phones() -> None:
+def test_scorer_returns_perfect_score_for_identical_phones(tmp_path: Path) -> None:
     recognizer = FakeRecognizer("HH AH L OW")
     scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
-    feedback = scorer.score("/tmp/audio.wav", "hello")
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
     assert isinstance(feedback, PronunciationFeedback)
     assert feedback.overall_score == 100.0
     assert feedback.issues == []
+    assert len(feedback.words) == 1
+    assert feedback.words[0].score == 100.0
 
 
-def test_scorer_flags_substitution_in_word() -> None:
+def test_scorer_flags_substitution_in_word(tmp_path: Path) -> None:
     recognizer = FakeRecognizer("HH EH L OW")
     scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
-    feedback = scorer.score("/tmp/audio.wav", "hello")
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
     assert feedback.overall_score == 75.0
     assert len(feedback.issues) == 1
     assert feedback.issues[0].word == "hello"
@@ -79,41 +103,94 @@ def test_scorer_flags_substitution_in_word() -> None:
     assert feedback.issues[0].actual_phonemes == ("EH",)
 
 
-def test_scorer_normalizes_allosaurus_ipa_output() -> None:
+def test_scorer_normalizes_allosaurus_ipa_output(tmp_path: Path) -> None:
     def quick_phonemes(text: str) -> list[tuple[str, tuple[str, ...]]]:
         return [("quick", ("K", "W", "IH", "K"))]
 
     recognizer = FakeRecognizer("kʰ w e n")
     scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=quick_phonemes)
-    feedback = scorer.score("/tmp/audio.wav", "quick")
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(str(wav), [WordSegment("quick", 0.0, 0.5)])
     assert feedback.overall_score == 50.0
     assert feedback.issues[0].expected_phonemes == ("IH",)
     assert feedback.issues[0].actual_phonemes == ("EH",)
 
 
-def test_scorer_flags_all_phones_deleted_when_audio_empty() -> None:
+def test_scorer_flags_all_phones_deleted_when_audio_empty(tmp_path: Path) -> None:
     recognizer = FakeRecognizer("")
     scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
-    feedback = scorer.score("/tmp/audio.wav", "hello")
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
     assert feedback.overall_score == 0.0
     assert all(issue.error_type is ErrorType.DELETION for issue in feedback.issues)
 
 
-def test_scorer_uses_configured_lang_id() -> None:
+def test_scorer_uses_configured_lang_id(tmp_path: Path) -> None:
     recognizer = FakeRecognizer("HH AH L OW")
     scorer = AllosaurusPronunciationScorer(recognizer, lang_id="ipa", text_to_phonemes=fake_text_to_phonemes)
-    scorer.score("/tmp/audio.wav", "hello")
-    assert recognizer.calls == [("/tmp/audio.wav", "ipa")]
+    wav = make_wav(tmp_path / "audio.wav")
+    scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
+    assert len(recognizer.calls) == 1
+    path, lang_id = recognizer.calls[0]
+    assert lang_id == "ipa"
+    assert path.endswith(".wav")
 
 
-def test_scorer_builds_default_recognizer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scorer_builds_default_recognizer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     recognizer = FakeRecognizer("HH AH L OW")
     fake_app = types.ModuleType("allosaurus.app")
     fake_app.read_recognizer = lambda: recognizer
     monkeypatch.setitem(sys.modules, "allosaurus.app", fake_app)
     scorer = AllosaurusPronunciationScorer(text_to_phonemes=fake_text_to_phonemes)
-    feedback = scorer.score("/tmp/audio.wav", "hello")
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
     assert feedback.overall_score == 100.0
+
+
+def test_scorer_isolates_words(tmp_path: Path) -> None:
+    def two_words(text: str) -> list[tuple[str, tuple[str, ...]]]:
+        lexicon = {"cat": ("K", "AE", "T"), "sat": ("S", "AE", "T")}
+        entry = lexicon.get(text)
+        return [(text, entry)] if entry else []
+
+    recognizer = SequenceRecognizer(["K AE T", "S EH T"])
+    scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=two_words)
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(
+        str(wav),
+        [WordSegment("cat", 0.0, 0.4), WordSegment("sat", 0.5, 0.9)],
+    )
+    assert feedback.words[0].word == "cat"
+    assert feedback.words[0].issues == ()
+    assert feedback.words[0].score == 100.0
+    assert feedback.words[1].word == "sat"
+    assert len(feedback.words[1].issues) == 1
+    assert feedback.words[1].issues[0].error_type is ErrorType.SUBSTITUTION
+    assert feedback.overall_score == round(100.0 * 5 / 6, 1)
+
+
+def test_scorer_skips_words_without_phonemes_or_timing(tmp_path: Path) -> None:
+    recognizer = FakeRecognizer("HH AH L OW")
+    scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
+    wav = make_wav(tmp_path / "audio.wav")
+    feedback = scorer.score(
+        str(wav),
+        [WordSegment("hello", 0.0, 0.5), WordSegment("zzyzx", 0.5, 0.8)],
+    )
+    assert [word.word for word in feedback.words] == ["hello"]
+
+    feedback = scorer.score(str(wav), [WordSegment("hello", 0.5, 0.4)])
+    assert feedback.words == []
+    assert feedback.overall_score == 0.0
+
+
+def test_scorer_cleans_up_slice_files(tmp_path: Path) -> None:
+    recognizer = FakeRecognizer("HH AH L OW")
+    scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
+    wav = make_wav(tmp_path / "audio.wav")
+    scorer.score(str(wav), [WordSegment("hello", 0.0, 0.5)])
+    for path, _ in recognizer.calls:
+        assert not Path(path).exists(), "slice temp file must be cleaned up"
 
 
 def test_default_recognizer_loader_imports_allosaurus(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,12 +273,12 @@ def test_scorer_converts_non_wav_before_recognize(tmp_path: Path) -> None:
 
     recognizer = FakeRecognizer("HH AH L OW")
     scorer = AllosaurusPronunciationScorer(recognizer, text_to_phonemes=fake_text_to_phonemes)
-    scorer.score(str(source), "hello")
+    scorer.score(str(source), [WordSegment("hello", 0.0, 0.5)])
 
     assert len(recognizer.calls) == 1
     wav_path = recognizer.calls[0][0]
     assert wav_path.endswith(".wav")
-    assert not Path(wav_path).exists(), "converted temp file must be cleaned up"
+    assert not Path(wav_path).exists(), "slice temp file must be cleaned up"
 
 
 _AI_INSTALLED = importlib.util.find_spec("allosaurus") is not None and importlib.util.find_spec("cmudict") is not None
@@ -218,5 +295,8 @@ def test_integration_scores_a_real_wav_file(tmp_path: Path) -> None:
         f.writeframes(frames)
 
     scorer = AllosaurusPronunciationScorer()
-    feedback = scorer.score(str(wav_path), "hello world")
+    feedback = scorer.score(
+        str(wav_path),
+        [WordSegment("hello", 0.0, 0.25), WordSegment("world", 0.25, 0.5)],
+    )
     assert 0.0 <= feedback.overall_score <= 100.0

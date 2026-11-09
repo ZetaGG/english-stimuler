@@ -80,6 +80,8 @@ def test_record_saves_evaluation_and_returns_id() -> None:
     assert saved.filler_count == 1
     assert saved.overall_band == 6.9
     assert saved.report is not None
+    assert saved.pronunciation_issues == (PronunciationIssue("hello", ErrorType.SUBSTITUTION),)
+    assert saved.grammar_issues == (GrammarIssue("typo", 0, 4),)
 
 
 def test_record_generates_unique_ids() -> None:

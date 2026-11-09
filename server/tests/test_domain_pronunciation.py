@@ -1,5 +1,6 @@
 import pytest
 
+from app.domain.models import WordSegment
 from app.domain.pronunciation import (
     AlignmentOp,
     ErrorType,
@@ -7,14 +8,15 @@ from app.domain.pronunciation import (
     PronunciationFeedback,
     PronunciationIssue,
     PronunciationScorer,
+    PronunciationWordIssue,
     align_phonemes,
-    build_issues,
+    build_word_issues,
     phone_accuracy,
 )
 
 
 class FakeScorer(PronunciationScorer):
-    def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
+    def score(self, audio_path: str, words: list[WordSegment]) -> PronunciationFeedback:
         return PronunciationFeedback(overall_score=80.0)
 
 
@@ -50,17 +52,26 @@ def test_issue_defaults_to_empty_phonemes_and_zero_score() -> None:
     assert issue.score == 0.0
 
 
-def test_feedback_exposes_score_and_issues() -> None:
+def test_feedback_exposes_score_issues_and_words() -> None:
     feedback = PronunciationFeedback(overall_score=75.0)
     assert feedback.overall_score == 75.0
     assert feedback.issues == []
+    assert feedback.words == []
 
 
-def test_feedback_accepts_issues() -> None:
+def test_feedback_accepts_issues_and_words() -> None:
     issue = PronunciationIssue(word="cat", error_type=ErrorType.MISPRONOUNCED)
-    feedback = PronunciationFeedback(overall_score=60.0, issues=[issue])
+    word = PronunciationWordIssue(
+        word="cat",
+        target_phonemes=("K", "AE", "T"),
+        actual_phonemes=("K", "AE", "T"),
+        score=100.0,
+        issues=(),
+    )
+    feedback = PronunciationFeedback(overall_score=60.0, issues=[issue], words=[word])
     assert len(feedback.issues) == 1
-    assert feedback.issues[0].word == "cat"
+    assert len(feedback.words) == 1
+    assert feedback.words[0].word == "cat"
 
 
 def test_feedback_rejects_score_out_of_range() -> None:
@@ -81,7 +92,7 @@ def test_scorer_is_abstract() -> None:
 
 
 def test_concrete_scorer_implements_contract() -> None:
-    feedback = FakeScorer().score("/tmp/audio.wav", "hello world")
+    feedback = FakeScorer().score("/tmp/audio.wav", [WordSegment("hello", 0.0, 0.5)])
     assert feedback.overall_score == 80.0
 
 
@@ -125,13 +136,8 @@ def test_phone_accuracy_empty_expected_is_zero() -> None:
     assert phone_accuracy(0, []) == 0.0
 
 
-def test_build_issues_flags_substitution_on_right_word() -> None:
-    word_phonemes = [("hello", ("h", "ə", "l", "oʊ")), ("world", ("w", "ɜ", "l", "d"))]
-    edits = align_phonemes(
-        ["h", "ə", "l", "oʊ", "w", "ɜ", "l", "d"],
-        ["h", "ɛ", "l", "oʊ", "w", "ɜ", "l", "d"],
-    )
-    issues = build_issues(word_phonemes, edits)
+def test_build_word_issues_flags_substitution_on_word() -> None:
+    issues = build_word_issues("hello", ("h", "ə", "l", "oʊ"), ("h", "ɛ", "l", "oʊ"))
     assert len(issues) == 1
     assert issues[0].word == "hello"
     assert issues[0].error_type is ErrorType.SUBSTITUTION
@@ -139,10 +145,8 @@ def test_build_issues_flags_substitution_on_right_word() -> None:
     assert issues[0].actual_phonemes == ("ɛ",)
 
 
-def test_build_issues_flags_deletion() -> None:
-    word_phonemes = [("cat", ("k", "æ", "t"))]
-    edits = align_phonemes(["k", "æ", "t"], ["k", "æ"])
-    issues = build_issues(word_phonemes, edits)
+def test_build_word_issues_flags_deletion() -> None:
+    issues = build_word_issues("cat", ("k", "æ", "t"), ("k", "æ"))
     assert issues == [
         PronunciationIssue(
             word="cat",
@@ -152,24 +156,27 @@ def test_build_issues_flags_deletion() -> None:
     ]
 
 
-def test_build_issues_attributes_insertion_to_following_word() -> None:
-    word_phonemes = [("a", ("a",)), ("b", ("b",))]
-    edits = align_phonemes(["a", "b"], ["a", "x", "b"])
-    issues = build_issues(word_phonemes, edits)
+def test_build_word_issues_attributes_insertion_to_word() -> None:
+    issues = build_word_issues("b", ("b",), ("a", "b"))
     assert issues == [
         PronunciationIssue(
             word="b",
+            error_type=ErrorType.INSERTION,
+            actual_phonemes=("a",),
+        )
+    ]
+
+
+def test_build_word_issues_attributes_trailing_insertion_to_word() -> None:
+    issues = build_word_issues("a", ("a",), ("a", "x"))
+    assert issues == [
+        PronunciationIssue(
+            word="a",
             error_type=ErrorType.INSERTION,
             actual_phonemes=("x",),
         )
     ]
 
 
-def test_build_issues_ignores_trailing_insertion_with_no_word() -> None:
-    word_phonemes = [("a", ("a",))]
-    edits = align_phonemes(["a"], ["a", "x"])
-    assert build_issues(word_phonemes, edits) == []
-
-
-def test_build_issues_empty_edits_yields_nothing() -> None:
-    assert build_issues([("a", ("a",))], []) == []
+def test_build_word_issues_ignores_perfect_match() -> None:
+    assert build_word_issues("a", ("a",), ("a",)) == []

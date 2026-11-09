@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { EvaluationRecord } from "../types";
 import { BandBadge, bandColor } from "./BandBadge";
+import { GrammarIssues } from "./GrammarIssues";
+import { PronunciationIssues } from "./PronunciationIssues";
 import { ScoreBar } from "./ScoreBar";
 
 interface HistoryProps {
@@ -119,6 +121,11 @@ function Detail({
           </div>
         </div>
       )}
+
+      <div className="grid-2">
+        <PronunciationIssues words={record.pronunciation_words ?? []} />
+        <GrammarIssues issues={record.grammar_issues} />
+      </div>
     </div>
   );
 }

@@ -50,6 +50,9 @@ class HistoryService:
             grammar_band=result.bands.grammar,
             overall_band=result.bands.overall,
             report=result.report,
+            pronunciation_issues=tuple(result.pronunciation.issues),
+            pronunciation_words=tuple(result.pronunciation.words),
+            grammar_issues=result.grammar_issues,
         )
         self._store.save(record)
         return record.id

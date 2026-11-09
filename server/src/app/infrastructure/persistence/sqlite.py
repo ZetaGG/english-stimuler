@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.feedback import FeedbackReport
+from app.domain.grammar import GrammarIssue
 from app.domain.history import EvaluationRecord, EvaluationStore
+from app.domain.pronunciation import ErrorType, PronunciationIssue, PronunciationWordIssue
 from app.domain.vocabulary import VocabularyItem, VocabularyStore
 
 
@@ -34,6 +36,125 @@ def _report_from_json(raw: str | None) -> FeedbackReport | None:
     )
 
 
+def _pronunciation_issues_to_json(issues: Sequence[PronunciationIssue]) -> str | None:
+    if not issues:
+        return None
+    return json.dumps(
+        [
+            {
+                "word": issue.word,
+                "error_type": issue.error_type.value,
+                "expected_phonemes": list(issue.expected_phonemes),
+                "actual_phonemes": list(issue.actual_phonemes),
+                "score": issue.score,
+            }
+            for issue in issues
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _pronunciation_issues_from_json(raw: str | None) -> tuple[PronunciationIssue, ...]:
+    if not raw:
+        return ()
+    return tuple(
+        PronunciationIssue(
+            word=item.get("word", ""),
+            error_type=ErrorType(item.get("error_type", "mispronounced")),
+            expected_phonemes=tuple(item.get("expected_phonemes", [])),
+            actual_phonemes=tuple(item.get("actual_phonemes", [])),
+            score=item.get("score", 0.0),
+        )
+        for item in json.loads(raw)
+    )
+
+
+def _grammar_issues_to_json(issues: Sequence[GrammarIssue]) -> str | None:
+    if not issues:
+        return None
+    return json.dumps(
+        [
+            {
+                "message": issue.message,
+                "offset": issue.offset,
+                "length": issue.length,
+                "suggestions": list(issue.suggestions),
+                "rule_id": issue.rule_id,
+                "severity": issue.severity,
+            }
+            for issue in issues
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _grammar_issues_from_json(raw: str | None) -> tuple[GrammarIssue, ...]:
+    if not raw:
+        return ()
+    return tuple(
+        GrammarIssue(
+            message=item.get("message", ""),
+            offset=item.get("offset", 0),
+            length=item.get("length", 0),
+            suggestions=tuple(item.get("suggestions", [])),
+            rule_id=item.get("rule_id", ""),
+            severity=item.get("severity", "error"),
+        )
+        for item in json.loads(raw)
+    )
+
+
+def _pronunciation_words_to_json(words: Sequence[PronunciationWordIssue]) -> str | None:
+    if not words:
+        return None
+    return json.dumps(
+        [
+            {
+                "word": word.word,
+                "target_phonemes": list(word.target_phonemes),
+                "actual_phonemes": list(word.actual_phonemes),
+                "score": word.score,
+                "issues": [
+                    {
+                        "word": issue.word,
+                        "error_type": issue.error_type.value,
+                        "expected_phonemes": list(issue.expected_phonemes),
+                        "actual_phonemes": list(issue.actual_phonemes),
+                        "score": issue.score,
+                    }
+                    for issue in word.issues
+                ],
+            }
+            for word in words
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _pronunciation_words_from_json(raw: str | None) -> tuple[PronunciationWordIssue, ...]:
+    if not raw:
+        return ()
+    return tuple(
+        PronunciationWordIssue(
+            word=item.get("word", ""),
+            target_phonemes=tuple(item.get("target_phonemes", [])),
+            actual_phonemes=tuple(item.get("actual_phonemes", [])),
+            score=item.get("score", 0.0),
+            issues=tuple(
+                PronunciationIssue(
+                    word=issue.get("word", ""),
+                    error_type=ErrorType(issue.get("error_type", "mispronounced")),
+                    expected_phonemes=tuple(issue.get("expected_phonemes", [])),
+                    actual_phonemes=tuple(issue.get("actual_phonemes", [])),
+                    score=issue.get("score", 0.0),
+                )
+                for issue in item.get("issues", [])
+            ),
+        )
+        for item in json.loads(raw)
+    )
+
+
 def _to_record(row: sqlite3.Row) -> EvaluationRecord:
     return EvaluationRecord(
         id=row["id"],
@@ -51,6 +172,9 @@ def _to_record(row: sqlite3.Row) -> EvaluationRecord:
         grammar_band=row["grammar_band"],
         overall_band=row["overall_band"],
         report=_report_from_json(row["report"]),
+        pronunciation_issues=_pronunciation_issues_from_json(row["pronunciation_issues"]),
+        pronunciation_words=_pronunciation_words_from_json(row["pronunciation_words"]),
+        grammar_issues=_grammar_issues_from_json(row["grammar_issues"]),
     )
 
 
@@ -76,7 +200,10 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
                 pronunciation_band REAL NOT NULL,
                 grammar_band REAL NOT NULL,
                 overall_band REAL NOT NULL,
-                report TEXT
+                report TEXT,
+                pronunciation_issues TEXT,
+                pronunciation_words TEXT,
+                grammar_issues TEXT
             );
 
             CREATE TABLE IF NOT EXISTS vocabulary (
@@ -85,6 +212,15 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
             );
             """
         )
+        with self._lock:
+            columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(evaluations)")}
+            if "pronunciation_issues" not in columns:
+                self._connection.execute("ALTER TABLE evaluations ADD COLUMN pronunciation_issues TEXT")
+            if "pronunciation_words" not in columns:
+                self._connection.execute("ALTER TABLE evaluations ADD COLUMN pronunciation_words TEXT")
+            if "grammar_issues" not in columns:
+                self._connection.execute("ALTER TABLE evaluations ADD COLUMN grammar_issues TEXT")
+            self._connection.commit()
 
     def save(self, record: EvaluationRecord) -> None:
         with self._lock:
@@ -93,8 +229,9 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
             INSERT INTO evaluations (
                 id, created_at, expected_text, transcript, wpm, lexical_diversity,
                 pronunciation_score, grammar_error_count, filler_count, fluency_band,
-                lexical_band, pronunciation_band, grammar_band, overall_band, report
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                lexical_band, pronunciation_band, grammar_band, overall_band, report,
+                pronunciation_issues, pronunciation_words, grammar_issues
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.id,
@@ -112,6 +249,9 @@ class SQLiteStore(EvaluationStore, VocabularyStore):
                 record.grammar_band,
                 record.overall_band,
                 _report_to_json(record.report),
+                _pronunciation_issues_to_json(record.pronunciation_issues),
+                _pronunciation_words_to_json(record.pronunciation_words),
+                _grammar_issues_to_json(record.grammar_issues),
             ),
         )
         self._connection.commit()

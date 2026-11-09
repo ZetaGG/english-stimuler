@@ -35,10 +35,69 @@ export const recordFixture: EvaluationRecord = {
     strengths: ["Clear structure", "Natural pace"],
     tips: ["Reduce filler words"],
   },
+  pronunciation_issues: [
+    {
+      word: "beach",
+      error_type: "substitution",
+      expected_phonemes: ["IY"],
+      actual_phonemes: ["IH"],
+      score: 0,
+    },
+    {
+      word: "beach",
+      error_type: "deletion",
+      expected_phonemes: ["CH"],
+      actual_phonemes: [],
+      score: 0,
+    },
+  ],
+  pronunciation_words: [
+    {
+      word: "the",
+      target_phonemes: ["DH", "AH"],
+      actual_phonemes: ["DH", "AH"],
+      score: 100,
+      issues: [],
+    },
+    {
+      word: "beach",
+      target_phonemes: ["B", "IY", "CH"],
+      actual_phonemes: ["B", "IH", "CH"],
+      score: 33.3,
+      issues: [
+        {
+          word: "beach",
+          error_type: "substitution",
+          expected_phonemes: ["IY"],
+          actual_phonemes: ["IH"],
+          score: 0,
+        },
+        {
+          word: "beach",
+          error_type: "deletion",
+          expected_phonemes: ["CH"],
+          actual_phonemes: [],
+          score: 0,
+        },
+      ],
+    },
+  ],
+  grammar_issues: [
+    {
+      message: "Possible missing article",
+      offset: 4,
+      length: 5,
+      suggestions: ["a"],
+      rule_id: "ARTICLES",
+      severity: "warning",
+    },
+  ],
 };
 
 export const resultFixture: EvaluationResult = {
   id: "xyz789",
+  transcript: "My favorite place is the beach",
+  expected_text: "Describe your favorite place to relax.",
   metrics: {
     word_count: 22,
     duration: 12.4,
@@ -51,12 +110,50 @@ export const resultFixture: EvaluationResult = {
   },
   pronunciation: {
     overall_score: 78,
+    words: [
+      {
+        word: "the",
+        target_phonemes: ["DH", "AH"],
+        actual_phonemes: ["DH", "AH"],
+        score: 100,
+        issues: [],
+      },
+      {
+        word: "beach",
+        target_phonemes: ["B", "IY", "CH"],
+        actual_phonemes: ["B", "IH", "CH"],
+        score: 33.3,
+        issues: [
+          {
+            word: "beach",
+            error_type: "substitution",
+            expected_phonemes: ["IY"],
+            actual_phonemes: ["IH"],
+            score: 0,
+          },
+          {
+            word: "beach",
+            error_type: "deletion",
+            expected_phonemes: ["CH"],
+            actual_phonemes: [],
+            score: 0,
+          },
+        ],
+      },
+    ],
     issues: [
       {
         word: "beach",
         error_type: "substitution",
-        expected_phonemes: ["B", "IY1", "CH"],
-        actual_phonemes: ["B", "IH1", "CH"],
+        expected_phonemes: ["IY"],
+        actual_phonemes: ["IH"],
+        score: 0,
+      },
+      {
+        word: "beach",
+        error_type: "deletion",
+        expected_phonemes: ["CH"],
+        actual_phonemes: [],
         score: 0,
       },
     ],

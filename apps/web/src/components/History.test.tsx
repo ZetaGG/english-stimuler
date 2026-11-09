@@ -9,8 +9,41 @@ describe("History", () => {
 
     expect(screen.getByText("History (1)")).toBeInTheDocument();
     fireEvent.click(screen.getByText(/favorite place to relax/i));
-    expect(screen.getByText(/you said/i)).toBeInTheDocument();
+    expect(screen.getByText(/you said:/i)).toBeInTheDocument();
     expect(screen.getByText(/my favorite place is the beach/i)).toBeInTheDocument();
+  });
+
+  it("shows pronunciation and grammar issues in the detail view", () => {
+    render(<History items={[recordFixture]} total={1} loading={false} error={null} onDelete={vi.fn()} onBack={() => {}} />);
+
+    fireEvent.click(screen.getByText(/favorite place to relax/i));
+    expect(screen.getByRole("heading", { name: "Pronunciation" })).toBeInTheDocument();
+    expect(screen.getByText("beach")).toBeInTheDocument();
+    expect(screen.getByText("2 sounds off")).toBeInTheDocument();
+    expect(screen.getByText("You pronounced 1 of 2 words correctly.")).toBeInTheDocument();
+    expect(screen.getByText(/say it as:/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Grammar" })).toBeInTheDocument();
+    expect(screen.getByText(/possible missing article/i)).toBeInTheDocument();
+    expect(screen.getByText("→ a")).toBeInTheDocument();
+  });
+
+  it("shows an empty state in the detail view when there are no issues", () => {
+    render(
+      <History
+        items={[{ ...recordFixture, pronunciation_words: [], grammar_issues: [] }]}
+        total={1}
+        loading={false}
+        error={null}
+        onDelete={vi.fn()}
+        onBack={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(/favorite place to relax/i));
+    expect(screen.getByRole("heading", { name: "Pronunciation" })).toBeInTheDocument();
+    expect(screen.getByText(/pronunciation was clear/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Grammar" })).toBeInTheDocument();
+    expect(screen.getByText(/no grammar issues detected/i)).toBeInTheDocument();
   });
 
   it("deletes a session from the detail view", async () => {

@@ -3,6 +3,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.domain.models import WordSegment
+
 
 class ErrorType(str, Enum):
     SUBSTITUTION = "substitution"
@@ -28,8 +30,18 @@ class PronunciationIssue:
 
 
 @dataclass(frozen=True)
+class PronunciationWordIssue:
+    word: str
+    target_phonemes: tuple[str, ...]
+    actual_phonemes: tuple[str, ...]
+    score: float
+    issues: tuple[PronunciationIssue, ...] = ()
+
+
+@dataclass(frozen=True)
 class PronunciationFeedback:
     overall_score: float
+    words: list[PronunciationWordIssue] = field(default_factory=list)
     issues: list[PronunciationIssue] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -39,7 +51,7 @@ class PronunciationFeedback:
 
 class PronunciationScorer(ABC):
     @abstractmethod
-    def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
+    def score(self, audio_path: str, words: Sequence[WordSegment]) -> PronunciationFeedback:
         raise NotImplementedError  # pragma: no cover
 
 
@@ -96,53 +108,36 @@ def phone_accuracy(expected_count: int, edits: Sequence[PhoneEdit]) -> float:
     return round(100.0 * matched / expected_count, 1)
 
 
-def build_issues(
-    word_phonemes: Sequence[tuple[str, Sequence[str]]],
-    edits: Sequence[PhoneEdit],
-) -> list[PronunciationIssue]:
-    lengths = [len(phonemes) for _, phonemes in word_phonemes]
-    boundaries = [0]
-    for length in lengths:
-        boundaries.append(boundaries[-1] + length)
-
-    def word_at(index: int) -> str | None:
-        for word_index, bound in enumerate(boundaries[1:]):
-            if index < bound:
-                return word_phonemes[word_index][0]
-        return None
-
+def build_word_issues(word: str, expected: Sequence[str], actual: Sequence[str]) -> list[PronunciationIssue]:
+    """Build pronunciation issues for a single word, attributing every edit to that word."""
+    edits = align_phonemes(expected, actual)
     issues: list[PronunciationIssue] = []
-    expected_index = 0
     for edit in edits:
         if edit.op is AlignmentOp.MATCH:
-            expected_index += 1
-        elif edit.op is AlignmentOp.SUBSTITUTION:
+            continue
+        if edit.op is AlignmentOp.SUBSTITUTION:
             issues.append(
                 PronunciationIssue(
-                    word=word_at(expected_index) or "",
+                    word=word,
                     error_type=ErrorType.SUBSTITUTION,
                     expected_phonemes=(edit.expected or "",),
                     actual_phonemes=(edit.actual or "",),
                 )
             )
-            expected_index += 1
         elif edit.op is AlignmentOp.DELETION:
             issues.append(
                 PronunciationIssue(
-                    word=word_at(expected_index) or "",
+                    word=word,
                     error_type=ErrorType.DELETION,
                     expected_phonemes=(edit.expected or "",),
                 )
             )
-            expected_index += 1
         else:
-            following = word_at(expected_index)
-            if following is not None:
-                issues.append(
-                    PronunciationIssue(
-                        word=following,
-                        error_type=ErrorType.INSERTION,
-                        actual_phonemes=(edit.actual or "",),
-                    )
+            issues.append(
+                PronunciationIssue(
+                    word=word,
+                    error_type=ErrorType.INSERTION,
+                    actual_phonemes=(edit.actual or "",),
                 )
+            )
     return issues

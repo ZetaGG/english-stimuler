@@ -4,11 +4,20 @@ from pathlib import Path
 import pytest
 
 from app.domain.feedback import FeedbackReport
+from app.domain.grammar import GrammarIssue
 from app.domain.history import EvaluationRecord
+from app.domain.pronunciation import ErrorType, PronunciationIssue, PronunciationWordIssue
 from app.infrastructure.persistence.sqlite import SQLiteStore
 
 
-def make_record(record_id: str, created_at: str = "2026-01-01T00:00:00+00:00", report: FeedbackReport | None = None) -> EvaluationRecord:
+def make_record(
+    record_id: str,
+    created_at: str = "2026-01-01T00:00:00+00:00",
+    report: FeedbackReport | None = None,
+    pronunciation_issues: tuple[PronunciationIssue, ...] = (),
+    pronunciation_words: tuple[PronunciationWordIssue, ...] = (),
+    grammar_issues: tuple[GrammarIssue, ...] = (),
+) -> EvaluationRecord:
     return EvaluationRecord(
         id=record_id,
         created_at=created_at,
@@ -25,6 +34,9 @@ def make_record(record_id: str, created_at: str = "2026-01-01T00:00:00+00:00", r
         grammar_band=8.0,
         overall_band=7.0,
         report=report,
+        pronunciation_issues=pronunciation_issues,
+        pronunciation_words=pronunciation_words,
+        grammar_issues=grammar_issues,
     )
 
 
@@ -36,6 +48,81 @@ def test_save_and_get_roundtrip_with_report(tmp_path: Path) -> None:
     assert loaded == record
     assert loaded.report is not None
     assert loaded.report.strengths == ("clear",)
+
+
+def test_save_and_get_roundtrip_with_issues(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "test.db")
+    record = make_record(
+        "abc",
+        pronunciation_issues=(
+            PronunciationIssue("beach", ErrorType.SUBSTITUTION, ("IY",), ("IH",), score=0.0),
+            PronunciationIssue("beach", ErrorType.DELETION, ("CH",)),
+        ),
+        pronunciation_words=(
+            PronunciationWordIssue(
+                word="beach",
+                target_phonemes=("B", "IY", "CH"),
+                actual_phonemes=("B", "IH", "CH"),
+                score=33.3,
+                issues=(
+                    PronunciationIssue("beach", ErrorType.SUBSTITUTION, ("IY",), ("IH",), score=0.0),
+                    PronunciationIssue("beach", ErrorType.DELETION, ("CH",)),
+                ),
+            ),
+        ),
+        grammar_issues=(GrammarIssue("Possible typo", 4, 5, suggestions=("a",), rule_id="EN_A", severity="warning"),),
+    )
+    store.save(record)
+    assert store.get("abc") == record
+
+
+def test_opens_legacy_db_and_adds_missing_columns(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE evaluations (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            expected_text TEXT NOT NULL,
+            transcript TEXT NOT NULL,
+            wpm REAL NOT NULL,
+            lexical_diversity REAL NOT NULL,
+            pronunciation_score REAL NOT NULL,
+            grammar_error_count INTEGER NOT NULL,
+            filler_count INTEGER NOT NULL,
+            fluency_band REAL NOT NULL,
+            lexical_band REAL NOT NULL,
+            pronunciation_band REAL NOT NULL,
+            grammar_band REAL NOT NULL,
+            overall_band REAL NOT NULL,
+            report TEXT
+        );
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO evaluations (
+            id, created_at, expected_text, transcript, wpm, lexical_diversity,
+            pronunciation_score, grammar_error_count, filler_count, fluency_band,
+            lexical_band, pronunciation_band, grammar_band, overall_band, report
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("old", "2026-01-01T00:00:00+00:00", "hello world", "hello world", 120.0, 0.8, 80.0, 1, 0, 6.0, 7.0, 7.5, 8.0, 7.0, None),
+    )
+    connection.commit()
+    connection.close()
+
+    store = SQLiteStore(path)
+    loaded = store.get("old")
+    assert loaded is not None
+    assert loaded.pronunciation_issues == ()
+    assert loaded.pronunciation_words == ()
+    assert loaded.grammar_issues == ()
+    store.save(make_record("new"))
+    assert store.count() == 2
 
 
 def test_get_returns_none_for_missing(tmp_path: Path) -> None:

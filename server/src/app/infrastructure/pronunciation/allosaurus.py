@@ -1,15 +1,20 @@
 import importlib
+import os
 import tempfile
 import unicodedata
+import wave
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from app.domain.metrics import WordSegment
 from app.domain.pronunciation import (
+    AlignmentOp,
     PronunciationFeedback,
     PronunciationScorer,
+    PronunciationWordIssue,
     align_phonemes,
-    build_issues,
+    build_word_issues,
     phone_accuracy,
 )
 
@@ -167,29 +172,105 @@ class AllosaurusPronunciationScorer(PronunciationScorer):
         recognizer: Any | None = None,
         lang_id: str = "eng",
         text_to_phonemes: Callable[[str], list[tuple[str, Sequence[str]]]] = text_to_word_phonemes,
+        pad: float = 0.05,
+        min_slice: float = 0.05,
     ) -> None:
         self._recognizer = recognizer
         self._lang_id = lang_id
         self._text_to_phonemes = text_to_phonemes
+        self._pad = pad
+        self._min_slice = min_slice
 
     def _get_recognizer(self) -> Any:
         if self._recognizer is None:
             self._recognizer = _default_recognizer()
         return self._recognizer
 
-    def score(self, audio_path: str, expected_text: str) -> PronunciationFeedback:
+    def score(self, audio_path: str, words: Sequence[WordSegment]) -> PronunciationFeedback:
         recognizer = self._get_recognizer()
         wav_path = ensure_wav(audio_path)
         try:
-            actual = recognizer.recognize(wav_path, lang_id=self._lang_id)
+            return self._score_words(recognizer, wav_path, words)
         finally:
             if wav_path != audio_path:
                 Path(wav_path).unlink(missing_ok=True)
-        actual_phones = [normalize_phone(phone) for phone in (actual or "").split()]
-        word_phonemes = self._text_to_phonemes(expected_text)
-        expected_phones = [phone for _, phones in word_phonemes for phone in phones]
-        edits = align_phonemes(expected_phones, actual_phones)
-        return PronunciationFeedback(
-            overall_score=phone_accuracy(len(expected_phones), edits),
-            issues=build_issues(word_phonemes, edits),
-        )
+
+    def _score_words(
+        self,
+        recognizer: Any,
+        wav_path: str,
+        words: Sequence[WordSegment],
+    ) -> PronunciationFeedback:
+        with wave.open(wav_path, "rb") as source:
+            params = source.getparams()
+            frames = source.readframes(params.nframes)
+        duration = params.nframes / params.framerate
+
+        results: list[tuple[str, tuple[str, ...], tuple[str, ...], list, tuple]] = []
+        for segment in words:
+            entries = self._text_to_phonemes(segment.text)
+            if not entries:
+                continue
+            expected = tuple(entries[0][1])
+            start, end = self._slice_bounds(segment, words, duration)
+            if end - start < self._min_slice:
+                continue
+            slice_path = self._write_slice(frames, params, start, end)
+            try:
+                actual_raw = recognizer.recognize(slice_path, lang_id=self._lang_id)
+                actual = tuple(_filter_silence(normalize_phone(phone) for phone in (actual_raw or "").split()))
+            except Exception:
+                continue
+            finally:
+                Path(slice_path).unlink(missing_ok=True)
+            edits = align_phonemes(expected, actual)
+            results.append((segment.text, expected, actual, edits, tuple(build_word_issues(segment.text, expected, actual))))
+
+        total_expected = sum(len(expected) for _, expected, _, _, _ in results)
+        total_matched = sum(sum(1 for edit in edits if edit.op is AlignmentOp.MATCH) for _, _, _, edits, _ in results)
+        overall = round(100.0 * total_matched / total_expected, 1) if total_expected else 0.0
+        word_feedbacks = [
+            PronunciationWordIssue(
+                word=text,
+                target_phonemes=expected,
+                actual_phonemes=actual,
+                score=phone_accuracy(len(expected), edits),
+                issues=issues,
+            )
+            for text, expected, actual, edits, issues in results
+        ]
+        issues = [issue for word in word_feedbacks for issue in word.issues]
+        return PronunciationFeedback(overall_score=overall, words=word_feedbacks, issues=issues)
+
+    def _slice_bounds(self, segment: WordSegment, words: Sequence[WordSegment], duration: float) -> tuple[float, float]:
+        prev_end: float | None = None
+        next_start: float | None = None
+        for other in words:
+            if other is segment:
+                continue
+            if other.end <= segment.start:
+                prev_end = other.end if prev_end is None else max(prev_end, other.end)
+            elif other.start >= segment.end:
+                next_start = other.start if next_start is None else min(next_start, other.start)
+        start = (prev_end + segment.start) / 2.0 if prev_end is not None else segment.start - self._pad
+        end = (segment.end + next_start) / 2.0 if next_start is not None else segment.end + self._pad
+        return max(0.0, start), min(duration, end)
+
+    def _write_slice(self, frames: bytes, params: Any, start: float, end: float) -> str:
+        fd, slice_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        byte_start = int(start * params.framerate) * params.sampwidth
+        byte_end = int(end * params.framerate) * params.sampwidth
+        with wave.open(slice_path, "wb") as target:
+            target.setnchannels(params.nchannels)
+            target.setsampwidth(params.sampwidth)
+            target.setframerate(params.framerate)
+            target.writeframes(frames[byte_start:byte_end])
+        return slice_path
+
+
+_SILENCE_TOKENS = frozenset({"", "sil", "silence", "spn", "sp"})
+
+
+def _filter_silence(phones: Sequence[str]) -> list[str]:
+    return [phone for phone in phones if phone not in _SILENCE_TOKENS]

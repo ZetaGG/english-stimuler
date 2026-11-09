@@ -34,6 +34,9 @@ export interface EvaluationRecord {
   grammar_band: number;
   overall_band: number;
   report: Report | null;
+  pronunciation_issues: PronunciationIssue[];
+  pronunciation_words: PronunciationWordIssue[];
+  grammar_issues: GrammarIssue[];
 }
 
 export interface EvaluationsPage {
@@ -62,6 +65,14 @@ export interface PronunciationIssue {
   score: number;
 }
 
+export interface PronunciationWordIssue {
+  word: string;
+  target_phonemes: string[];
+  actual_phonemes: string[];
+  score: number;
+  issues: PronunciationIssue[];
+}
+
 export interface GrammarIssue {
   message: string;
   offset: number;
@@ -73,6 +84,8 @@ export interface GrammarIssue {
 
 export interface EvaluationResult {
   id: string;
+  transcript: string;
+  expected_text: string;
   metrics: {
     word_count: number;
     duration: number;
@@ -85,6 +98,7 @@ export interface EvaluationResult {
   };
   pronunciation: {
     overall_score: number;
+    words: PronunciationWordIssue[];
     issues: PronunciationIssue[];
   };
   grammar_issues: GrammarIssue[];
